@@ -1827,6 +1827,114 @@ def test_collect_short_file_windows_multi_level_symlink(
     result.assert_outcomes(passed=1)
 
 
+# Conftest forcing the Windows code path of collection.
+WIN32_COLLECTION_CONFTEST = """
+        import sys
+
+        import pytest
+
+        @pytest.hookimpl(wrapper=True)
+        def pytest_collection():
+            # Only collection takes the Windows code path, not the startup.
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(sys, "platform", "win32")
+                return (yield)
+"""
+
+# Conftest hooks removing the "vanishing" directory while its parent is collected.
+REMOVE_VANISHING = {
+    # After the parent was listed, before the collection argument is matched
+    # against its entries (#12671).
+    "after-listing": """
+        @pytest.hookimpl(wrapper=True)
+        def pytest_make_collect_report(collector):
+            report = yield
+            if isinstance(collector, pytest.Directory) and collector.path == collector.config.rootpath:
+                collector.path.joinpath("vanishing").rmdir()
+            return report
+    """,
+    # After the parent was listed, before its collection reaches the entry.
+    "before-entry": """
+        @pytest.hookimpl(wrapper=True)
+        def pytest_collect_file(file_path):
+            if file_path.name == "test_it.py":
+                file_path.parent.joinpath("vanishing").rmdir()
+            return (yield)
+    """,
+    # Before the entry is checked to be ignored (virtualenv, norecursedirs).
+    "ignore-collect": """
+        @pytest.hookimpl(wrapper=True)
+        def pytest_ignore_collect(collection_path):
+            if collection_path.name == "vanishing":
+                collection_path.rmdir()
+            return (yield)
+    """,
+    # Before the entry is checked to be a package.
+    "collect-directory": """
+        @pytest.hookimpl(wrapper=True)
+        def pytest_collect_directory(path):
+            if path.name == "vanishing":
+                path.rmdir()
+            return (yield)
+    """,
+}
+
+
+@pytest.mark.parametrize("package", [False, True], ids=["dir", "package"])
+@pytest.mark.parametrize("args", [["test_it.py"], []], ids=["matching", "all"])
+@pytest.mark.parametrize("removal", REMOVE_VANISHING)
+def test_collect_entry_removed_during_collection(
+    pytester: Pytester, removal: str, args: list[str], package: bool
+) -> None:
+    """A directory entry removed while its parent is being collected does not
+    crash collection, also on Windows, where matching the collection argument
+    against the entries falls back to samefile_nofollow() (#12671)."""
+    pytester.makeconftest(WIN32_COLLECTION_CONFTEST + REMOVE_VANISHING[removal])
+    pytester.makepyfile(test_it="def test(): pass")
+    if package:
+        pytester.makepyfile(__init__="")
+    vanishing = pytester.mkdir("vanishing")
+
+    result = pytester.runpytest(*args)
+
+    result.assert_outcomes(passed=1)
+    assert not vanishing.exists()
+
+
+def test_collect_path_missing(pytester: Pytester) -> None:
+    """A path which does not exist (anymore) is collected as nothing."""
+    session = Session.from_config(pytester.parseconfigure())
+    assert session._collect_path(pytester.path / "vanishing", {}) == ()
+
+
+@pytest.mark.parametrize("package", [False, True], ids=["dir", "package"])
+@pytest.mark.parametrize("name", ["test_vanishing.py", "setup.py"])
+def test_collect_file_removed_during_collection(
+    pytester: Pytester, name: str, package: bool
+) -> None:
+    """A file removed while its directory is being collected does not crash the
+    collection of another file in it (#12671)."""
+    pytester.makeconftest(
+        WIN32_COLLECTION_CONFTEST
+        + f"""
+        @pytest.hookimpl(wrapper=True)
+        def pytest_collect_file(file_path):
+            if file_path.name == "conftest.py":
+                file_path.parent.joinpath({name!r}).unlink()
+            return (yield)
+        """
+    )
+    pytester.makepyfile(test_it="def test(): pass")
+    if package:
+        pytester.makepyfile(__init__="")
+    vanishing = pytester.makepyfile(**{name[:-3]: "import setuptools"})
+
+    result = pytester.runpytest("--doctest-modules", "test_it.py")
+
+    result.assert_outcomes(passed=1)
+    assert not vanishing.exists()
+
+
 def test_pyargs_collection_tree(pytester: Pytester, monkeypatch: MonkeyPatch) -> None:
     """When using `--pyargs`, the collection tree of a pyargs collection
     argument should only include parents in the import path, not up to confcutdir.

@@ -1,0 +1,1 @@
+Fixed a crash during collection on Windows when an entry of a directory was removed while pytest was collecting the directory, for example the temporary directory of another pytest process creating its cache directory in the same rootdir. Likewise, ``--doctest-modules`` no longer crashes when a ``setup.py`` is removed during collection.

@@ -605,6 +605,34 @@ def test_samefile_nofollow_zero_file_id(
         assert not samefile_nofollow(p1, p1)
 
 
+@pytest.mark.parametrize("missing", ["removed", "test_one.py/child"])
+def test_samefile_nofollow_missing_path(tmp_path: Path, missing: str) -> None:
+    """A path which does not exist (anymore), for example because it was removed
+    during collection, is not the same as any other path (#12671)."""
+    p1 = tmp_path / "test_one.py"
+    p1.touch()
+    p2 = tmp_path / missing
+
+    assert not samefile_nofollow(p2, p1)
+    assert not samefile_nofollow(p1, p2)
+
+
+def test_samefile_nofollow_reraises_other_errors(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    p1 = tmp_path / "test_one.py"
+    p1.touch()
+
+    def lstat(self: Path) -> os.stat_result:
+        raise PermissionError(errno.EACCES, "some permission error")
+
+    with monkeypatch.context() as mp:
+        mp.setattr(Path, "lstat", lstat)
+
+        with pytest.raises(PermissionError, match="some permission error"):
+            samefile_nofollow(p1, p1)
+
+
 def test_scandir_with_non_existent_directory() -> None:
     # Test with a directory that does not exist
     non_existent_dir = "path_to_non_existent_dir"
@@ -626,6 +654,17 @@ def test_scandir_handles_os_error() -> None:
             scandir("/fake/path")
         # Verify that the is_file method was called on the mock entry
         mock_entry.is_file.assert_called_once()
+
+
+def test_scandir_skips_removed_entry() -> None:
+    """An entry which was removed after its directory was listed is skipped (#13083)."""
+    removed_entry = unittest.mock.MagicMock()
+    removed_entry.is_file.side_effect = FileNotFoundError(errno.ENOENT, "removed")
+    entry = unittest.mock.MagicMock()
+    with unittest.mock.patch("os.scandir") as mock_scandir:
+        mock_scandir.return_value.__enter__.return_value = [removed_entry, entry]
+        assert scandir("/fake/path") == [entry]
+    removed_entry.is_file.assert_called_once()
 
 
 class TestImportLibMode:

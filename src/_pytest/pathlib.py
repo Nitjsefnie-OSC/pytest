@@ -1094,7 +1094,14 @@ def samefile_nofollow(p1: Path, p2: Path) -> bool:
 
     Unlike Path.samefile(), does not resolve symlinks.
     """
-    s1, s2 = p1.lstat(), p2.lstat()
+    try:
+        s1, s2 = p1.lstat(), p2.lstat()
+    except OSError as err:
+        # A path which was removed (e.g. during collection) is not the same as any.
+        if _ignore_error(err):
+            return False
+        # Reraise non-ignorable errors to avoid hiding issues.
+        raise
     # On Windows st_ino is the file ID, which file systems are free to not support,
     # in which case it is 0 for every file -- WinFsp mounts such as sshfs-win are one
     # example. os.path.samestat() would then consider any two files on the volume to

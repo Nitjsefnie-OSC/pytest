@@ -1868,6 +1868,26 @@ def test_is_setup_py_different_encoding(tmp_path: Path, mod: str) -> None:
     assert _is_setup_py(setup_py)
 
 
+def test_is_setup_py_missing(tmp_path: Path) -> None:
+    """A setup.py which does not exist (anymore), for example because it was
+    removed during collection, is not one (#12671)."""
+    assert not _is_setup_py(tmp_path.joinpath("setup.py"))
+
+
+def test_is_setup_py_reraises_other_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_py = tmp_path.joinpath("setup.py")
+    setup_py.write_text("from setuptools import setup", "utf-8")
+
+    def read_bytes(self: Path) -> bytes:
+        raise PermissionError("some permission error")
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    with pytest.raises(PermissionError, match="some permission error"):
+        _is_setup_py(setup_py)
+
+
 @pytest.mark.parametrize(
     "name, expected", [("__main__.py", True), ("__init__.py", False)]
 )

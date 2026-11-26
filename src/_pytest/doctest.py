@@ -38,6 +38,7 @@ from _pytest.nodes import Collector
 from _pytest.nodes import Item
 from _pytest.outcomes import OutcomeException
 from _pytest.outcomes import skip
+from _pytest.pathlib import _ignore_error
 from _pytest.pathlib import fnmatch_ex
 from _pytest.python import Module
 from _pytest.warning_types import PytestWarning
@@ -142,7 +143,14 @@ def pytest_collect_file(
 def _is_setup_py(path: Path) -> bool:
     if path.name != "setup.py":
         return False
-    contents = path.read_bytes()
+    try:
+        contents = path.read_bytes()
+    except OSError as err:
+        # A setup.py which was removed (e.g. during collection) is not one.
+        if _ignore_error(err):
+            return False
+        # Reraise non-ignorable errors to avoid hiding issues.
+        raise
     return b"setuptools" in contents or b"distutils" in contents
 
 
